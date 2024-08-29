@@ -223,7 +223,7 @@
             >
               <div
                 class="h-full w-full flex flex-col"
-                use:dndzone={{ items: page.sections, type: "page-sections" }}
+                use:dndzone={{ items: page.sections, type: "page-sections", centreDraggedOnCursor: true }}
                 on:consider={(e) => handleDndConsider(index, e)}
                 on:finalize={(e) => handleDndFinalize(index, e)}
               >
@@ -243,7 +243,7 @@
         <div class="h-20 border-2 border-red-600">
           <div
             class="h-full w-full flex flex-col"
-            use:dndzone={{ items: [], type: "page-sections" }}
+            use:dndzone={{ items: [], type: "page-sections", centreDraggedOnCursor: true }}
           />
         </div>
       </div>
