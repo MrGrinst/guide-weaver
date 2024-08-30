@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
   import { PDFDocument, PageSizes } from "pdf-lib";
   import * as pdfjs from "pdfjs-dist";
   import workerUrl from "pdfjs-dist/build/pdf.worker.mjs?worker&url";
@@ -6,16 +6,45 @@
 
   let pdfFile;
   let pdfImages = [];
-  let markersByPage = {};
-  let splitSections = [];
+  let outputPages = [];
+  let scriptureSections = [];
   let pdfDoc;
   let totalPages = 1;
-  let outputPages = [];
+  let originalFileName = null;
+  let history = [];
 
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
+  function debounce(func, wait) {
+    let timeout;
+    return function (...args) {
+      const context = this;
+      clearTimeout(timeout);
+      timeout = setTimeout(() => func.apply(context, args), wait);
+    };
+  }
+
+  const saveState = debounce(() => {
+    const newJson = JSON.stringify({ outputPages, scriptureSections });
+    if (history[history.length - 1] !== newJson) {
+      history.push(newJson);
+      history = history;
+    }
+  }, 100);
+
+  function undo() {
+    if (history.length > 1) {
+      history.pop(); // Remove the current state
+      const parsed = JSON.parse(history[history.length - 1]); // Apply the previous state
+      outputPages = parsed.outputPages;
+      scriptureSections = parsed.scriptureSections;
+      history = history; // Trigger reactivity
+    }
+  }
+
   async function handleFileUpload(event) {
     const file = event.target.files[0];
+    originalFileName = file.name;
     if (file && file.type === "application/pdf") {
       pdfFile = file;
       await convertPdfToImages();
@@ -31,7 +60,6 @@
     totalPages = pdf.numPages;
 
     pdfImages = [];
-    markersByPage = {};
     for (let i = 1; i <= totalPages; i++) {
       const page = await pdf.getPage(i);
       const scale = 3;
@@ -45,7 +73,6 @@
       await page.render({ canvasContext: context, viewport }).promise;
 
       pdfImages.push(canvas.toDataURL("image/png"));
-      markersByPage[i - 1] = [];
     }
     pdfImages = pdfImages;
   }
@@ -55,92 +82,92 @@
       .fill()
       .map((_, index) => ({
         id: `page_${index + 1}`,
-        sections: [],
+        sections: [
+          {
+            id: `${index + 1}_0`,
+            image: pdfImages[index],
+          },
+        ],
       }));
+    saveState();
   }
 
-  function addMarker(index, e) {
-    const rect = e.target.getBoundingClientRect();
-    const y = e.clientY - rect.top;
-    const newMarker = { id: Date.now(), y, height: e.target.height };
-    markersByPage[index] = [...(markersByPage[index] || []), newMarker];
-    markersByPage = markersByPage;
+  function handleClick(pageIndex, sectionIndex, e) {
+    const img = e.target;
+    const rect = img.getBoundingClientRect();
+    const scaleY = img.naturalHeight / img.height;
+    const y = (e.clientY - rect.top) * scaleY;
+    splitSection(pageIndex, sectionIndex, y);
   }
 
-  function updateMarkerPosition(index, id, newY) {
-    markersByPage[index] = markersByPage[index].map((marker) =>
-      marker.id === id ? { ...marker, y: newY } : marker,
+  async function splitSection(pageIndex, sectionIndex, y) {
+    const section = outputPages[pageIndex].sections[sectionIndex];
+    const img = new Image();
+    img.src = section.image;
+    await img.decode();
+
+    const canvas1 = document.createElement("canvas");
+    const ctx1 = canvas1.getContext("2d");
+    canvas1.width = img.naturalWidth;
+    canvas1.height = y;
+    ctx1.drawImage(img, 0, 0, img.naturalWidth, y, 0, 0, img.naturalWidth, y);
+
+    const canvas2 = document.createElement("canvas");
+    const ctx2 = canvas2.getContext("2d");
+    canvas2.width = img.naturalWidth;
+    canvas2.height = img.naturalHeight - y;
+    ctx2.drawImage(
+      img,
+      0,
+      y,
+      img.naturalWidth,
+      img.naturalHeight - y,
+      0,
+      0,
+      img.naturalWidth,
+      img.naturalHeight - y,
     );
-    markersByPage = markersByPage;
-  }
 
-  async function splitAllPages() {
-    splitSections = [];
-    for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
-      const img = new Image();
-      img.src = pdfImages[pageNum - 1];
-      await img.decode();
+    const newSections = [
+      {
+        id: `${section.id}_1`,
+        image: canvas1.toDataURL("image/png"),
+      },
+      {
+        id: `${section.id}_2`,
+        image: canvas2.toDataURL("image/png"),
+      },
+    ];
 
-      const sortedMarkers = [...markersByPage[pageNum - 1]].sort(
-        (a, b) => a.y - b.y,
-      );
-      let prevY = 0;
-
-      const pageSections = sortedMarkers.map((marker, index) => {
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-        const scaledMarkerY = (marker.y / marker.height) * img.height;
-        const height = scaledMarkerY - prevY;
-
-        canvas.width = img.width;
-        canvas.height = height;
-
-        ctx.drawImage(img, 0, -prevY, img.width, img.height);
-        prevY = scaledMarkerY;
-
-        return {
-          id: `${pageNum}_${index}`,
-          image: canvas.toDataURL("image/png"),
-          originalPage: pageNum,
-        };
-      });
-
-      // Add the last section
-      const lastCanvas = document.createElement("canvas");
-      const lastCtx = lastCanvas.getContext("2d");
-      lastCanvas.width = img.width;
-      lastCanvas.height = img.height - prevY;
-      lastCtx.drawImage(img, 0, -prevY, img.width, img.height);
-
-      pageSections.push({
-        id: `${pageNum}_${pageSections.length}`,
-        image: lastCanvas.toDataURL("image/png"),
-        originalPage: pageNum,
-      });
-
-      splitSections = [...splitSections, ...pageSections];
-    }
-
-    // Initialize output pages with split sections
-    outputPages = outputPages.map((page, index) => ({
-      ...page,
-      sections: splitSections.filter(
-        (section) => section.originalPage === index + 1,
-      ),
-    }));
+    // Replace the original section with the two new sections
+    outputPages[pageIndex].sections.splice(sectionIndex, 1, ...newSections);
+    outputPages = outputPages; // Trigger reactivity
+    saveState();
   }
 
   function handleDndConsider(pageIndex, e) {
-    outputPages[pageIndex].sections = e.detail.items;
+    if (pageIndex === -2) {
+      scriptureSections = e.detail.items;
+    } else {
+      outputPages[pageIndex].sections = e.detail.items;
+    }
   }
 
   function handleDndFinalize(pageIndex, e) {
-    outputPages[pageIndex].sections = e.detail.items;
+    if (pageIndex !== -1) {
+      if (pageIndex === -2) {
+        scriptureSections = e.detail.items;
+      } else {
+        outputPages[pageIndex].sections = e.detail.items;
+      }
+    }
+    saveState();
   }
 
   function addNewPage() {
     const newPageId = `page_${outputPages.length + 1}`;
     outputPages = [...outputPages, { id: newPageId, sections: [] }];
+    saveState();
   }
 
   async function generateOutputPdf() {
@@ -174,8 +201,135 @@
     const blob = new Blob([pdfBytes], { type: "application/pdf" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = "rearranged.pdf";
+    link.download = originalFileName.replace(".pdf", "-updated.pdf");
     link.click();
+  }
+
+  let showScriptureModal = false;
+  let scriptureReferences = "";
+
+  function openScriptureModal() {
+    showScriptureModal = true;
+  }
+
+  function closeScriptureModal() {
+    showScriptureModal = false;
+    scriptureReferences = "";
+  }
+
+  async function addScripture() {
+    if (scriptureReferences.trim()) {
+      const scriptureImages = await createScriptureImages(scriptureReferences);
+      scriptureSections = [
+        ...scriptureSections,
+        ...scriptureImages.map((image, i) => ({
+          id: `scripture_${i}_${Date.now()}`,
+          image,
+        })),
+      ];
+      closeScriptureModal();
+      saveState();
+    }
+  }
+
+  async function createScriptureImages(references: string) {
+    const scriptureTexts = await fetchScriptureText(references);
+
+    const images = [];
+    for (const passage of scriptureTexts) {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      const scale = 4;
+      const fontSize = 7 * scale;
+      const ySpacing = 13 * scale;
+      const xMargin = 42 * scale;
+      canvas.width = 425 * scale;
+      canvas.height = 3000 * scale;
+
+      ctx.font = fontSize + "px EB Garamond";
+
+      let totalHeight = ySpacing * 2;
+      let metrics;
+      const [reference, text] = passage.split(" - ");
+      const words = text.split(" ");
+      let line = reference + " - ";
+      let lineHeight = 0;
+      for (let word of words) {
+        const testLine = line + word + " ";
+        metrics = ctx.measureText(testLine);
+        if (metrics.width > canvas.width - xMargin * 2) {
+          lineHeight +=
+            metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
+          line = word + " ";
+        } else {
+          line = testLine;
+        }
+      }
+      lineHeight +=
+        metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
+      totalHeight += lineHeight;
+
+      canvas.height = totalHeight - ySpacing;
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "black";
+      ctx.font = fontSize + "px EB Garamond";
+
+      let y = ySpacing;
+      line = "";
+      metrics = undefined;
+
+      ctx.font = "bold " + fontSize + "px EB Garamond";
+      const referenceMetrics = ctx.measureText(reference + " - ");
+      ctx.fillText(reference + " - ", xMargin, y);
+
+      ctx.font = fontSize + "px EB Garamond";
+      let xOffset = referenceMetrics.width;
+
+      for (let word of words) {
+        const testLine = line + word + " ";
+        metrics = ctx.measureText(testLine);
+        if (metrics.width + xOffset > canvas.width - xMargin * 2) {
+          ctx.fillText(line, xMargin + xOffset, y);
+          line = word + " ";
+          y += metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
+          xOffset = 0;
+        } else {
+          line = testLine;
+        }
+      }
+      ctx.fillText(line, xMargin + xOffset, y);
+      y +=
+        metrics.fontBoundingBoxAscent +
+        metrics.fontBoundingBoxDescent +
+        ySpacing;
+
+      images.push(canvas.toDataURL("image/png"));
+    }
+
+    return images;
+  }
+
+  async function fetchScriptureText(references: string) {
+    const apiUrl = `https://api.esv.org/v3/passage/text/?q=${encodeURIComponent(references)}&include-passage-references=true&include-verse-numbers=false&include-footnotes=false&include-headings=false&include-short-copyright=true`;
+
+    const headers = {
+      Authorization: `Token 949800eb47c7ad8a634d9`,
+    };
+    headers.Authorization = headers.Authorization.split(" ").join(
+      " " + window.piece,
+    );
+    const response = await fetch(apiUrl, { headers });
+
+    if (response.ok) {
+      const data = await response.json();
+      return data.passages.map((p) =>
+        p.replace("\n\n", " - ").replaceAll(/\s+/g, " "),
+      );
+    } else {
+      console.error(`Failed to fetch scripture for ${references}`);
+      return null;
+    }
   }
 </script>
 
@@ -184,129 +338,127 @@
   {#if pdfImages.length === 0}
     <p>
       Welcome! This tool helps you customize your community group discussion
-      guide PDF by splitting questions, rearranging them, and removing ones you
-      don't plan to use.
+      guide PDF by splitting questions, rearranging them, and adding Scripture.
     </p>
     <div class="flex-grow" />
   {/if}
 
   {#if pdfImages.length > 0}
-    {#if splitSections.length > 0}
-      <p>
-        Great! Now you can drag sections to rearrange them. To remove a section,
-        simply drag it to the trash area at the bottom.
-      </p>
-      <div class="self-center flex flex-row gap-2">
-        <button
-          class="w-48 bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
-          on:click={addNewPage}>Add New Page</button
-        >
-        <button
-          class="w-56 bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
-          on:click={generateOutputPdf}>Generate and Download</button
-        >
-      </div>
+    <p>
+      Click on the image to split a section. You can drag sections to rearrange
+      them. To remove a section, simply drag it to the trash area at the bottom.
+    </p>
+    <div class="self-center flex flex-row gap-2">
+      <button
+        class="w-48 bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
+        disabled={history.length === 1}
+        on:click={undo}>Undo</button
+      >
+      <button
+        class="w-48 bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
+        on:click={addNewPage}>Add New Page</button
+      >
+      <button
+        class="w-48 bg-purple-500 hover:bg-purple-600 text-white font-bold py-2 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
+        on:click={openScriptureModal}>Add Scripture</button
+      >
+      <button
+        class="w-56 bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
+        on:click={generateOutputPdf}>Generate and Download</button
+      >
+    </div>
 
-      <div class="self-center flex flex-row gap-8">
-        {#each outputPages as page, index (page.id)}
-          <div class="flex flex-col">
-            <h3>
-              Page {page.id.split("_")[1]}
-              <button
-                on:click={() =>
-                  (outputPages = outputPages.filter((p, i) => i !== index))}
-                class="text-red-500 underline">Delete</button
-              >
-            </h3>
-            <div
-              class="border-2 border-green-600 flex-shrink-0 w-[425px] h-[550px]"
+    <div class="self-center w-full flex-shrink-0 flex flex-row gap-8 overflow-y-visible overflow-x-scroll">
+      <div class="flex-grow"></div>
+      {#each outputPages as page, pageIndex (page.id)}
+        <div class="flex flex-col">
+          <h3>
+            Page {page.id.split("_")[1]}
+            <button
+              on:click={() => {
+                outputPages = outputPages.filter((p, i) => i !== pageIndex);
+                saveState();
+              }}
+              class="text-red-500 underline">Delete</button
             >
-              <div
-                class="h-full w-full flex flex-col"
-                use:dndzone={{ items: page.sections, type: "page-sections", centreDraggedOnCursor: true }}
-                on:consider={(e) => handleDndConsider(index, e)}
-                on:finalize={(e) => handleDndFinalize(index, e)}
-              >
-                {#each page.sections as section (section.id)}
-                  <div class="border border-red-600">
-                    <img src={section.image} alt="Section {section.id}" />
-                  </div>
-                {/each}
-              </div>
+          </h3>
+          <div
+            class="border-2 overflow-y-visible border-green-600 flex-shrink-0 w-[425px] h-[550px]"
+          >
+            <div
+              class="h-full w-full flex flex-col"
+              use:dndzone={{
+                items: page.sections,
+                type: "page-sections",
+                centreDraggedOnCursor: true,
+              }}
+              on:consider={(e) => handleDndConsider(pageIndex, e)}
+              on:finalize={(e) => handleDndFinalize(pageIndex, e)}
+            >
+              {#each page.sections as section, sectionIndex (section.id)}
+                <div class="border border-red-600">
+                  <img
+                    src={section.image}
+                    alt="Section {section.id}"
+                    on:click={(e) => handleClick(pageIndex, sectionIndex, e)}
+                  />
+                </div>
+              {/each}
             </div>
           </div>
-        {/each}
-      </div>
-      <div class="flex-grow" />
-      <div class="self-center flex flex-col w-[850px]">
-        <h3>Trash</h3>
-        <div class="h-20 border-2 border-red-600">
-          <div
-            class="h-full w-full flex flex-col"
-            use:dndzone={{ items: [], type: "page-sections", centreDraggedOnCursor: true }}
-          />
         </div>
-      </div>
-    {:else}
-      <p>
-        Click on the image to place a split line. Click on a split line again to
-        remove it. When you're satisfied with your splits, click the "Arrange
-        Sections" button below.
-      </p>
-      <button
-        class="self-center w-48 bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105 mb-6"
-        on:click={splitAllPages}>Arrange Sections</button
-      >
-      <div class="self-center flex flex-row gap-4">
-        {#each pdfImages as pdfImage, index}
-          <div class="relative w-[425px] h-auto">
-            <img
-              on:click={(e) => addMarker(index, e)}
-              on:dragstart|preventDefault
-              src={pdfImage}
-              alt="PDF page {index + 1}"
-            />
-            {#each markersByPage[index] || [] as marker (marker.id)}
-              <div
-                class="absolute left-0 right-0 h-0.5 bg-red-500 cursor-move"
-                style="top: {marker.y}px;"
-                on:mousedown={(e) => {
-                  const startY = e.clientY;
-                  const startMarkerY = marker.y;
-                  let isDragging = false;
-
-                  function onMouseMove(e) {
-                    isDragging = true;
-                    const newY = Math.max(
-                      0,
-                      Math.min(
-                        e.clientY - startY + startMarkerY,
-                        e.target.offsetParent.clientHeight,
-                      ),
-                    );
-                    updateMarkerPosition(index, marker.id, newY);
-                  }
-
-                  function onMouseUp() {
-                    window.removeEventListener("mousemove", onMouseMove);
-                    window.removeEventListener("mouseup", onMouseUp);
-                    if (!isDragging) {
-                      markersByPage[index] = markersByPage[index].filter(
-                        (m) => m.id !== marker.id,
-                      );
-                      markersByPage = markersByPage;
-                    }
-                  }
-
-                  window.addEventListener("mousemove", onMouseMove);
-                  window.addEventListener("mouseup", onMouseUp);
-                }}
-              ></div>
-            {/each}
+      {/each}
+      {#if scriptureSections.length}
+        <div class="ms-12 flex flex-col">
+          <h3>
+            Scripture Bank
+            <button
+              on:click={() => {
+                scriptureSections = [];
+                saveState();
+              }}
+              class="text-red-500 underline">Delete</button
+            >
+          </h3>
+          <div
+            class="overflow-y-scroll border-2 border-purple-500 flex-shrink-0 w-[425px] h-[550px]"
+          >
+            <div
+              class="h-full w-full flex flex-col"
+              use:dndzone={{
+                items: scriptureSections,
+                type: "page-sections",
+                centreDraggedOnCursor: true,
+              }}
+              on:consider={(e) => handleDndConsider(-2, e)}
+              on:finalize={(e) => handleDndFinalize(-2, e)}
+            >
+              {#each scriptureSections as section, sectionIndex (section.id)}
+                <div class="border border-red-600">
+                  <img src={section.image} alt="Section {section.id}" />
+                </div>
+              {/each}
+            </div>
           </div>
-        {/each}
+        </div>
+      {/if}
+      <div class="flex-grow"></div>
+    </div>
+    <div class="flex-grow" />
+    <div class="self-center flex flex-col w-[850px]">
+      <h3>Trash</h3>
+      <div class="h-20 border-2 border-red-600">
+        <div
+          class="h-full w-full flex flex-col"
+          on:finalize={(e) => handleDndFinalize(-1, e)}
+          use:dndzone={{
+            items: [],
+            type: "page-sections",
+            centreDraggedOnCursor: true,
+          }}
+        />
       </div>
-    {/if}
+    </div>
   {:else}
     <button
       class="self-center w-48 bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-lg transition duration-300 ease-in-out transform hover:scale-105 shadow-md"
@@ -323,4 +475,34 @@
     </button>
     <div class="flex-grow" />
   {/if}
+  <a href="/copyright.html" class="text-sm">Copyright</a>
 </main>
+
+{#if showScriptureModal}
+  <div
+    class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center"
+  >
+    <div class="bg-gray-600 p-5 rounded-lg shadow-xl w-1/2">
+      <h2 class="text-xl mb-4">Add Scripture</h2>
+      <textarea
+        bind:value={scriptureReferences}
+        placeholder="Enter scripture references. Ex: Hebrews 10:19-25, 2 Corinthians 5:17-20, Ecc 3:1, 3:11"
+        class="border p-2 mb-4 w-full min-h-32"
+      />
+      <div class="flex justify-end">
+        <button
+          on:click={closeScriptureModal}
+          class="bg-gray-300 hover:bg-gray-400 text-black font-bold py-2 px-4 rounded mr-2"
+        >
+          Cancel
+        </button>
+        <button
+          on:click={addScripture}
+          class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded"
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
