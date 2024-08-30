@@ -2,7 +2,17 @@
   import { PDFDocument, PageSizes } from "pdf-lib";
   import * as pdfjs from "pdfjs-dist";
   import workerUrl from "pdfjs-dist/build/pdf.worker.mjs?worker&url";
+    import { onMount } from "svelte";
   import { dndzone } from "svelte-dnd-action";
+  import WebFont from 'webfontloader';
+
+  onMount(() => {
+    WebFont.load({
+      google: {
+        families: ['EB Garamond', 'EB Garamond:bold']
+      }
+    });
+  })
 
   let pdfFile;
   let pdfImages = [];
@@ -27,8 +37,7 @@
   const saveState = debounce(() => {
     const newJson = JSON.stringify({ outputPages, scriptureSections });
     if (history[history.length - 1] !== newJson) {
-      history.push(newJson);
-      history = history;
+      history = [...history.slice(-9), newJson];
     }
   }, 100);
 
@@ -109,23 +118,33 @@
     const canvas1 = document.createElement("canvas");
     const ctx1 = canvas1.getContext("2d");
     canvas1.width = img.naturalWidth;
-    canvas1.height = y;
-    ctx1.drawImage(img, 0, 0, img.naturalWidth, y, 0, 0, img.naturalWidth, y);
+    canvas1.height = Math.max(y, 2);
+    ctx1.drawImage(
+      img,
+      0,
+      0,
+      img.naturalWidth,
+      Math.max(y, 2),
+      0,
+      0,
+      img.naturalWidth,
+      Math.max(y, 2),
+    );
 
     const canvas2 = document.createElement("canvas");
     const ctx2 = canvas2.getContext("2d");
     canvas2.width = img.naturalWidth;
-    canvas2.height = img.naturalHeight - y;
+    canvas2.height = img.naturalHeight - Math.max(y, 2);
     ctx2.drawImage(
       img,
       0,
-      y,
+      Math.max(y, 2),
       img.naturalWidth,
-      img.naturalHeight - y,
+      img.naturalHeight - Math.max(y, 2),
       0,
       0,
       img.naturalWidth,
-      img.naturalHeight - y,
+      img.naturalHeight - Math.max(y, 2),
     );
 
     const newSections = [
@@ -139,9 +158,8 @@
       },
     ];
 
-    // Replace the original section with the two new sections
     outputPages[pageIndex].sections.splice(sectionIndex, 1, ...newSections);
-    outputPages = outputPages; // Trigger reactivity
+    outputPages = outputPages;
     saveState();
   }
 
@@ -241,57 +259,63 @@
       const ctx = canvas.getContext("2d");
       const scale = 4;
       const fontSize = 7 * scale;
-      const ySpacing = 13 * scale;
+      const ySpacing = 10 * scale;
       const xMargin = 42 * scale;
       canvas.width = 425 * scale;
-      canvas.height = 3000 * scale;
+
+      ctx.font = "bold " + fontSize + "px EB Garamond";
+
+      const [reference, text] = passage.split(" - ");
+      const words = text.split(" ");
+      let line = reference + " - ";
+
+      const referenceMetrics = ctx.measureText(reference + " - ");
+      let xOffset = referenceMetrics.width;
 
       ctx.font = fontSize + "px EB Garamond";
 
       let totalHeight = ySpacing * 2;
       let metrics;
-      const [reference, text] = passage.split(" - ");
-      const words = text.split(" ");
-      let line = reference + " - ";
-      let lineHeight = 0;
-      for (let word of words) {
-        const testLine = line + word + " ";
+
+      for (let wordIndex = 0; wordIndex < words.length; wordIndex++) {
+        const word = words[wordIndex]
+        const maybeSpace = wordIndex !== words.length - 1 ? " " : ""
+        const testLine = line + word + maybeSpace;
         metrics = ctx.measureText(testLine);
-        if (metrics.width > canvas.width - xMargin * 2) {
-          lineHeight +=
-            metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
-          line = word + " ";
+        if (metrics.width + xOffset > canvas.width - xMargin * 2) {
+          console.log('making new line with ', word + maybeSpace)
+          console.log('making new line with ', word + maybeSpace)
+          totalHeight += metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
+          line = word + maybeSpace;
+          xOffset = 0;
         } else {
           line = testLine;
         }
       }
-      lineHeight +=
-        metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
-      totalHeight += lineHeight;
+      totalHeight += metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
 
-      canvas.height = totalHeight - ySpacing;
+      canvas.height = totalHeight - ySpacing * 1.4;
       ctx.fillStyle = "#FFFFFF";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = "black";
-      ctx.font = fontSize + "px EB Garamond";
 
       let y = ySpacing;
       line = "";
-      metrics = undefined;
 
       ctx.font = "bold " + fontSize + "px EB Garamond";
-      const referenceMetrics = ctx.measureText(reference + " - ");
       ctx.fillText(reference + " - ", xMargin, y);
+      xOffset = referenceMetrics.width;
 
       ctx.font = fontSize + "px EB Garamond";
-      let xOffset = referenceMetrics.width;
 
-      for (let word of words) {
-        const testLine = line + word + " ";
+      for (let wordIndex = 0; wordIndex < words.length; wordIndex++) {
+        const word = words[wordIndex]
+        const maybeSpace = wordIndex !== words.length - 1 ? " " : ""
+        const testLine = line + word + maybeSpace;
         metrics = ctx.measureText(testLine);
         if (metrics.width + xOffset > canvas.width - xMargin * 2) {
           ctx.fillText(line, xMargin + xOffset, y);
-          line = word + " ";
+          line = word + maybeSpace;
           y += metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
           xOffset = 0;
         } else {
@@ -299,10 +323,6 @@
         }
       }
       ctx.fillText(line, xMargin + xOffset, y);
-      y +=
-        metrics.fontBoundingBoxAscent +
-        metrics.fontBoundingBoxDescent +
-        ySpacing;
 
       images.push(canvas.toDataURL("image/png"));
     }
@@ -333,7 +353,11 @@
   }
 </script>
 
-<main class="flex flex-col p-4 gap-3 w-screen h-screen">
+<div class="loader hidden">
+  <div class="spinner"></div>
+</div>
+
+<main class="flex-col p-4 gap-3 w-screen min-h-screen hidden">
   <h1 class="justify-start">Guide Weaver</h1>
   {#if pdfImages.length === 0}
     <p>
@@ -350,7 +374,7 @@
     </p>
     <div class="self-center flex flex-row gap-2">
       <button
-        class="w-48 bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
+        class="w-48 disabled:bg-gray-400 disabled:hover:scale-100 bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
         disabled={history.length === 1}
         on:click={undo}>Undo</button
       >
@@ -368,7 +392,9 @@
       >
     </div>
 
-    <div class="self-center w-full flex-shrink-0 flex flex-row gap-8 overflow-y-visible overflow-x-scroll">
+    <div
+      class="self-center h-full w-full flex-shrink-0 flex flex-row gap-8 overflow-y-hidden overflow-x-scroll"
+    >
       <div class="flex-grow"></div>
       {#each outputPages as page, pageIndex (page.id)}
         <div class="flex flex-col">
@@ -382,29 +408,36 @@
               class="text-red-500 underline">Delete</button
             >
           </h3>
-          <div
-            class="border-2 overflow-y-visible border-green-600 flex-shrink-0 w-[425px] h-[550px]"
-          >
-            <div
-              class="h-full w-full flex flex-col"
-              use:dndzone={{
-                items: page.sections,
-                type: "page-sections",
-                centreDraggedOnCursor: true,
-              }}
-              on:consider={(e) => handleDndConsider(pageIndex, e)}
-              on:finalize={(e) => handleDndFinalize(pageIndex, e)}
-            >
-              {#each page.sections as section, sectionIndex (section.id)}
-                <div class="border border-red-600">
-                  <img
-                    src={section.image}
-                    alt="Section {section.id}"
-                    on:click={(e) => handleClick(pageIndex, sectionIndex, e)}
-                  />
-                </div>
-              {/each}
+          <div class="relative">
+            <div class="w-[425px] overflow-y-visible">
+              <div
+                class="flex flex-col min-h-[550px]"
+                use:dndzone={{
+                  items: page.sections,
+                  type: "page-sections",
+                  centreDraggedOnCursor: true,
+                }}
+                on:consider={(e) => handleDndConsider(pageIndex, e)}
+                on:finalize={(e) => handleDndFinalize(pageIndex, e)}
+              >
+                {#each page.sections as section, sectionIndex (section.id)}
+                  <div class="relative">
+                    <div
+                      class="absolute inset-0 border border-red-600 pointer-events-none"
+                    ></div>
+                    <img
+                      src={section.image}
+                      alt="Section {section.id}"
+                      on:click={(e) => handleClick(pageIndex, sectionIndex, e)}
+                      class="cursor-default"
+                    />
+                  </div>
+                {/each}
+              </div>
             </div>
+            <div
+              class="top-0 border-4 border-green-600 flex-shrink-0 w-[425px] h-[550px] overflow-hidden pointer-events-none z-10 absolute"
+            ></div>
           </div>
         </div>
       {/each}
@@ -421,10 +454,10 @@
             >
           </h3>
           <div
-            class="overflow-y-scroll border-2 border-purple-500 flex-shrink-0 w-[425px] h-[550px]"
+            class="overflow-y-scroll border-2 border-purple-500 flex-shrink-0 w-[425px]"
           >
             <div
-              class="h-full w-full flex flex-col"
+              class="h-full w-full flex flex-col !cursor-default"
               use:dndzone={{
                 items: scriptureSections,
                 type: "page-sections",
@@ -480,7 +513,7 @@
 
 {#if showScriptureModal}
   <div
-    class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center"
+    class="fixed z-20 inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center"
   >
     <div class="bg-gray-600 p-5 rounded-lg shadow-xl w-1/2">
       <h2 class="text-xl mb-4">Add Scripture</h2>
@@ -506,3 +539,32 @@
     </div>
   </div>
 {/if}
+
+<style>
+.loader {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
+}
+
+.spinner {
+  width: 50px;
+  height: 50px;
+  border: 5px solid #f3f3f3;
+  border-top: 5px solid #3498db;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+0% { transform: rotate(0deg); }
+100% { transform: rotate(360deg); }
+}
+</style>
+
