@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && cp ./copyright.html ./docs && cp CNAME ./docs",
+    "build": "yarn prettier && vite build && cp ./copyright.html ./docs && cp CNAME ./docs",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.node.json"
+    "check": "svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.node.json",
+    "prettier": "prettier -w **/*.svelte"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^3.1.1",

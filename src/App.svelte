@@ -27,6 +27,7 @@
   let originalFileName = null;
   let history = [];
   let pageDimensions;
+  let includeParagraphBreaks = false;
 
   afterUpdate(() => {
     pageDimensions = calculatePageDimensions();
@@ -306,6 +307,7 @@
 
   function closeScriptureModal() {
     showScriptureModal = false;
+    includeParagraphBreaks = false;
     scriptureReferences = "";
   }
 
@@ -340,35 +342,41 @@
       ctx.font = "bold " + fontSize + "px EB Garamond";
 
       const [reference, text] = passage.split(" - ");
-      const words = text.split(" ");
-      let line = reference + " - ";
-
-      const referenceMetrics = ctx.measureText(reference + " - ");
-      let xOffset = referenceMetrics.width;
-
-      ctx.font = fontSize + "px EB Garamond";
-
+      const lines = text.split("\n");
       let totalHeight = ySpacing * 2;
       let metrics;
 
-      for (let wordIndex = 0; wordIndex < words.length; wordIndex++) {
-        const word = words[wordIndex];
-        const maybeSpace = wordIndex !== words.length - 1 ? " " : "";
-        const testLine = line + word + maybeSpace;
-        metrics = ctx.measureText(testLine);
-        if (metrics.width + xOffset > canvas.width - xMargin * 2) {
-          totalHeight +=
-            (metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent) *
-            lineHeight;
-          line = word + maybeSpace;
-          xOffset = 0;
-        } else {
-          line = testLine;
+      for (const line of lines) {
+        const words = line.split(" ");
+        let currentLine = "";
+        let xOffset = 0;
+
+        if (lines.indexOf(line) === 0) {
+          currentLine = reference + " - ";
+          const referenceMetrics = ctx.measureText(currentLine);
+          xOffset = referenceMetrics.width;
+          ctx.font = fontSize + "px EB Garamond";
         }
+
+        for (let wordIndex = 0; wordIndex < words.length; wordIndex++) {
+          const word = words[wordIndex];
+          const maybeSpace = wordIndex !== words.length - 1 ? " " : "";
+          const testLine = currentLine + word + maybeSpace;
+          metrics = ctx.measureText(testLine);
+          if (metrics.width + xOffset > canvas.width - xMargin * 2) {
+            totalHeight +=
+              (metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent) *
+              lineHeight;
+            currentLine = word + maybeSpace;
+            xOffset = 0;
+          } else {
+            currentLine = testLine;
+          }
+        }
+        totalHeight +=
+          (metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent) *
+          lineHeight;
       }
-      totalHeight +=
-        (metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent) *
-        lineHeight;
 
       canvas.height = totalHeight - ySpacing * 1.4;
       ctx.fillStyle = "#FFFFFF";
@@ -376,31 +384,42 @@
       ctx.fillStyle = "black";
 
       let y = ySpacing;
-      line = "";
-
       ctx.font = "bold " + fontSize + "px EB Garamond";
       ctx.fillText(reference + " - ", xMargin, y);
-      xOffset = referenceMetrics.width;
+      const referenceMetrics = ctx.measureText(reference + " - ");
+      let xOffset = referenceMetrics.width;
 
       ctx.font = fontSize + "px EB Garamond";
 
-      for (let wordIndex = 0; wordIndex < words.length; wordIndex++) {
-        const word = words[wordIndex];
-        const maybeSpace = wordIndex !== words.length - 1 ? " " : "";
-        const testLine = line + word + maybeSpace;
-        metrics = ctx.measureText(testLine);
-        if (metrics.width + xOffset > canvas.width - xMargin * 2) {
-          ctx.fillText(line, xMargin + xOffset, y);
-          line = word + maybeSpace;
+      for (const line of lines) {
+        const words = line.split(" ");
+        let currentLine = "";
+
+        if (lines.indexOf(line) !== 0) {
           y +=
             (metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent) *
             lineHeight;
           xOffset = 0;
-        } else {
-          line = testLine;
         }
+
+        for (let wordIndex = 0; wordIndex < words.length; wordIndex++) {
+          const word = words[wordIndex];
+          const maybeSpace = wordIndex !== words.length - 1 ? " " : "";
+          const testLine = currentLine + word + maybeSpace;
+          metrics = ctx.measureText(testLine);
+          if (metrics.width + xOffset > canvas.width - xMargin * 2) {
+            ctx.fillText(currentLine, xMargin + xOffset, y);
+            currentLine = word + maybeSpace;
+            y +=
+              (metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent) *
+              lineHeight;
+            xOffset = 0;
+          } else {
+            currentLine = testLine;
+          }
+        }
+        ctx.fillText(currentLine, xMargin + xOffset, y);
       }
-      ctx.fillText(line, xMargin + xOffset, y);
 
       images.push(canvas.toDataURL("image/png"));
     }
@@ -422,7 +441,9 @@
     if (response.ok) {
       const data = await response.json();
       return data.passages.map((p) =>
-        p.replace("\n\n", " - ").replaceAll(/\s+/g, " "),
+        p
+          .replace("\n\n", " - ")
+          .replaceAll(includeParagraphBreaks ? / +/g : /\s+/g, " "),
       );
     } else {
       console.error(`Failed to fetch scripture for ${references}`);
@@ -514,7 +535,8 @@
           >
             <div class="w-full h-full overflow-y-visible">
               <div
-                class="flex flex-col min-h-[550px]"
+                style="height: {pageDimensions.height}px;"
+                class="flex flex-col"
                 use:dndzone={{
                   items: page.sections,
                   type: "page-sections",
@@ -626,6 +648,15 @@
       placeholder="Enter scripture references. Ex: Hebrews 10:19-25, 2 Corinthians 5:17-20, Ecc 3:1, 3:11"
       class="border p-2 mb-4 w-full min-h-32"
     />
+    <div class="flex items-center mb-4">
+      <input
+        type="checkbox"
+        id="includeParagraphBreaks"
+        bind:checked={includeParagraphBreaks}
+        class="mr-2"
+      />
+      <label for="includeParagraphBreaks">Include paragraph breaks</label>
+    </div>
     <div class="flex justify-end">
       <button
         on:click={closeScriptureModal}
