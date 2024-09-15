@@ -2,10 +2,11 @@
   import { PDFDocument, PageSizes } from "pdf-lib";
   import * as pdfjs from "pdfjs-dist";
   import workerUrl from "pdfjs-dist/build/pdf.worker.mjs?worker&url";
-  import { afterUpdate, onMount, tick } from "svelte";
-  import { dndzone } from "svelte-dnd-action";
+  import { afterUpdate, onMount } from "svelte";
+  import { dndzone, type Item, type Options } from "svelte-dnd-action";
   import WebFont from "webfontloader";
   import Modal from "./Modal.svelte";
+  import RectangleTool from "./RectangleTool.svelte";
 
   onMount(() => {
     WebFont.load({
@@ -28,6 +29,7 @@
   let history = [];
   let pageDimensions;
   let includeParagraphBreaks = false;
+  let isRectangleMode = false;
 
   afterUpdate(() => {
     pageDimensions = calculatePageDimensions();
@@ -55,6 +57,10 @@
       clearTimeout(timeout);
       timeout = setTimeout(() => func.apply(context, args), wait);
     };
+  }
+
+  function toggleRectangleMode() {
+    isRectangleMode = !isRectangleMode;
   }
 
   let showSpacerModal = false;
@@ -333,7 +339,7 @@
     for (const passage of scriptureTexts) {
       const canvas = document.createElement("canvas");
       const ctx = canvas.getContext("2d");
-      const fontSize = 7 * scale;
+      const fontSize = 8 * scale;
       const ySpacing = 10 * scale;
       const xMargin = 42 * scale;
       const lineHeight = 1.1;
@@ -450,7 +456,23 @@
       return null;
     }
   }
+
+  function updateSectionImage(pageIndex, sectionIndex, newImageData) {
+    outputPages[pageIndex].sections[sectionIndex].image = newImageData;
+    outputPages = outputPages;
+    saveState();
+    toggleRectangleMode();
+  }
 </script>
+
+<svelte:window
+  on:keydown={(e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "z") {
+      e.preventDefault();
+      undo();
+    }
+  }}
+/>
 
 <div class="loader hidden">
   <div class="spinner"></div>
@@ -473,25 +495,36 @@
     </p>
     <div class="self-center flex flex-row gap-2">
       <button
-        class="w-40 text-sm disabled:bg-gray-400 disabled:hover:scale-100 bg-red-500 hover:bg-red-600 text-white font-bold py-1 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
-        disabled={history.length === 1}
+        class="w-20 text-sm disabled:bg-gray-400 disabled:hover:scale-100 bg-red-500 hover:bg-red-600 text-white font-bold py-1 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
+        disabled={history.length === 1 || isRectangleMode}
         on:click={undo}>Undo</button
       >
       <button
-        class="w-40 text-sm bg-green-500 hover:bg-green-600 text-white font-bold py-1 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
-        on:click={addNewPage}>Add New Page</button
+        class="w-32 text-sm bg-green-500 disabled:bg-gray-400 disabled:hover:scale-100 hover:bg-green-600 text-white font-bold py-1 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
+        disabled={isRectangleMode}
+        on:click={addNewPage}>Add Page</button
       >
       <button
-        class="w-40 text-sm bg-purple-500 hover:bg-purple-600 text-white font-bold py-1 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
+        class="w-32 disabled:bg-gray-400 disabled:hover:scale-100 text-sm bg-purple-500 hover:bg-purple-600 text-white font-bold py-1 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
+        disabled={isRectangleMode}
         on:click={openScriptureModal}>Add Scripture</button
       >
       <button
-        class="w-40 text-sm bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-1 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
+        class="w-32 disabled:bg-gray-400 disabled:hover:scale-100 text-sm bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-1 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
+        disabled={isRectangleMode}
         on:click={openSpacerModal}>Add Spacer</button
       >
       <button
+        class="w-36 text-sm {isRectangleMode
+          ? 'bg-red-500 hover:bg-red-600'
+          : 'bg-cyan-500 hover:bg-cyan-600'} text-white font-bold py-1 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
+        on:click={toggleRectangleMode}
+      >
+        {isRectangleMode ? "Cancel" : "Add Rectangle"}
+      </button>
+      <button
         class="w-56 text-sm disabled:bg-gray-400 disabled:hover:scale-100 bg-blue-500 hover:bg-blue-600 text-white font-bold py-1 px-4 rounded transition duration-300 ease-in-out transform hover:scale-105"
-        disabled={isGenerating}
+        disabled={isGenerating || isRectangleMode}
         on:click={generateOutputPdf}>Generate and Download</button
       >
     </div>
@@ -534,31 +567,57 @@
             style="width: {pageDimensions.width}px; height: {pageDimensions.height}px;"
           >
             <div class="w-full h-full overflow-y-visible">
-              <div
-                style="height: {pageDimensions.height}px;"
-                class="flex flex-col"
-                use:dndzone={{
-                  items: page.sections,
-                  type: "page-sections",
-                  centreDraggedOnCursor: true,
-                }}
-                on:consider={(e) => handleDndConsider(pageIndex, e)}
-                on:finalize={(e) => handleDndFinalize(pageIndex, e)}
-              >
-                {#each page.sections as section, sectionIndex (section.id)}
-                  <div class="relative">
-                    <div
-                      class="absolute inset-0 border border-red-600 pointer-events-none"
-                    ></div>
-                    <img
-                      src={section.image}
-                      alt="Section {section.id}"
-                      on:click={(e) => handleClick(pageIndex, sectionIndex, e)}
-                      class="cursor-default"
-                    />
-                  </div>
-                {/each}
-              </div>
+              {#if isRectangleMode}
+                <div
+                  style="height: {pageDimensions.height}px;"
+                  class="flex flex-col"
+                >
+                  {#each page.sections as section, sectionIndex (section.id)}
+                    <div class="relative">
+                      <div
+                        class="absolute inset-0 border border-red-600 pointer-events-none"
+                      ></div>
+                      <RectangleTool
+                        image={section.image}
+                        on:updateImage={(event) =>
+                          updateSectionImage(
+                            pageIndex,
+                            sectionIndex,
+                            event.detail,
+                          )}
+                      />
+                    </div>
+                  {/each}
+                </div>
+              {:else}
+                <div
+                  style="height: {pageDimensions.height}px;"
+                  class="flex flex-col"
+                  use:dndzone={{
+                    items: page.sections,
+                    type: "page-sections",
+                    centreDraggedOnCursor: true,
+                  }}
+                  on:consider={(e) => handleDndConsider(pageIndex, e)}
+                  on:finalize={(e) => handleDndFinalize(pageIndex, e)}
+                >
+                  {#each page.sections as section, sectionIndex (section.id)}
+                    <div class="relative">
+                      <div
+                        class="absolute inset-0 border border-red-600 pointer-events-none"
+                      ></div>
+
+                      <img
+                        src={section.image}
+                        alt="Section {section.id}"
+                        on:click={(e) =>
+                          handleClick(pageIndex, sectionIndex, e)}
+                        class="cursor-default"
+                      />
+                    </div>
+                  {/each}
+                </div>
+              {/if}
             </div>
             <div
               style="height: {pageDimensions.height}px;"
