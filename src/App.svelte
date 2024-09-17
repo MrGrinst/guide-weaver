@@ -7,6 +7,7 @@
   import WebFont from "webfontloader";
   import Modal from "./Modal.svelte";
   import RectangleTool from "./RectangleTool.svelte";
+  import html2canvas from "html2canvas";
 
   onMount(() => {
     WebFont.load({
@@ -18,6 +19,7 @@
 
   const scale = 7;
   let isGenerating = false;
+  let isAddingScripture = false;
   let isUploading = false;
   let pdfFile;
   let pdfImages = [];
@@ -29,6 +31,7 @@
   let history = [];
   let pageDimensions;
   let includeParagraphBreaks = false;
+  let includeVerseNumbers = false;
   let isRectangleMode = false;
 
   afterUpdate(() => {
@@ -314,127 +317,104 @@
   function closeScriptureModal() {
     showScriptureModal = false;
     includeParagraphBreaks = false;
+    includeVerseNumbers = false;
     scriptureReferences = "";
   }
 
   async function addScripture() {
-    if (scriptureReferences.trim()) {
-      const scriptureImages = await createScriptureImages(scriptureReferences);
-      scriptureSections = [
-        ...scriptureSections,
-        ...scriptureImages.map((image, i) => ({
-          id: `scripture_${i}_${Date.now()}`,
-          image,
-        })),
-      ];
-      closeScriptureModal();
-      saveState();
+    const refs = scriptureReferences.trim();
+    if (refs) {
+      isAddingScripture = true;
+      showScriptureModal = false;
+      setTimeout(async () => {
+        const scriptureImages = await createScriptureImages(refs);
+        scriptureSections = [
+          ...scriptureSections,
+          ...scriptureImages.map((image, i) => ({
+            id: `scripture_${i}_${Date.now()}`,
+            image,
+          })),
+        ];
+        isAddingScripture = false;
+        closeScriptureModal();
+        saveState();
+      }, 200);
     }
   }
 
   async function createScriptureImages(references: string) {
     const scriptureTexts = await fetchScriptureText(references);
+    const scriptureScale = 3;
+    const fontSize = 8;
+    const width = 425;
 
     const images = [];
-    for (const passage of scriptureTexts) {
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-      const fontSize = 8 * scale;
-      const ySpacing = 10 * scale;
-      const xMargin = 42 * scale;
-      const lineHeight = 1.1;
-      canvas.width = 425 * scale;
-
-      ctx.font = "bold " + fontSize + "px EB Garamond";
-
-      const [reference, text] = passage.split(" - ");
-      const lines = text.split("\n");
-      let totalHeight = ySpacing * 2;
-      let metrics;
-
-      for (const line of lines) {
-        const words = line.split(" ");
-        let currentLine = "";
-        let xOffset = 0;
-
-        if (lines.indexOf(line) === 0) {
-          currentLine = reference + " - ";
-          const referenceMetrics = ctx.measureText(currentLine);
-          xOffset = referenceMetrics.width;
-          ctx.font = fontSize + "px EB Garamond";
-        }
-
-        for (let wordIndex = 0; wordIndex < words.length; wordIndex++) {
-          const word = words[wordIndex];
-          const maybeSpace = wordIndex !== words.length - 1 ? " " : "";
-          const testLine = currentLine + word + maybeSpace;
-          metrics = ctx.measureText(testLine);
-          if (metrics.width + xOffset > canvas.width - xMargin * 2) {
-            totalHeight +=
-              (metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent) *
-              lineHeight;
-            currentLine = word + maybeSpace;
-            xOffset = 0;
-          } else {
-            currentLine = testLine;
-          }
-        }
-        totalHeight +=
-          (metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent) *
-          lineHeight;
+    for (let passage of scriptureTexts) {
+      const reference = /<h2.*?>(.*?)<\/h2>/.exec(passage)![1];
+      passage = passage.trim();
+      passage = passage.replaceAll(/<br \/>/g, " ");
+      passage = passage.replaceAll(/&nbsp;/g, " ");
+      passage = passage.replaceAll(/\s+/g, " ");
+      passage = passage.replace(/<h2.*?>(.*?)<\/h2>/, "");
+      if (includeVerseNumbers || /(<b.*?chapter.*?>).*?(<\/b>)/.test(passage)) {
+        passage = passage.replace(/(<b.*?>).*?(<\/b>)/, `$1${reference}$2 - `);
+      } else {
+        passage = passage.replace(/(<p.*?>)/, `$1<b>${reference}</b> - `);
       }
-
-      canvas.height = totalHeight - ySpacing * 1.4;
-      ctx.fillStyle = "#FFFFFF";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "black";
-
-      let y = ySpacing;
-      ctx.font = "bold " + fontSize + "px EB Garamond";
-      ctx.fillText(reference + " - ", xMargin, y);
-      const referenceMetrics = ctx.measureText(reference + " - ");
-      let xOffset = referenceMetrics.width;
-
-      ctx.font = fontSize + "px EB Garamond";
-
-      for (const line of lines) {
-        const words = line.split(" ");
-        let currentLine = "";
-
-        if (lines.indexOf(line) !== 0) {
-          y +=
-            (metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent) *
-            lineHeight;
-          xOffset = 0;
-        }
-
-        for (let wordIndex = 0; wordIndex < words.length; wordIndex++) {
-          const word = words[wordIndex];
-          const maybeSpace = wordIndex !== words.length - 1 ? " " : "";
-          const testLine = currentLine + word + maybeSpace;
-          metrics = ctx.measureText(testLine);
-          if (metrics.width + xOffset > canvas.width - xMargin * 2) {
-            ctx.fillText(currentLine, xMargin + xOffset, y);
-            currentLine = word + maybeSpace;
-            y +=
-              (metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent) *
-              lineHeight;
-            xOffset = 0;
-          } else {
-            currentLine = testLine;
-          }
-        }
-        ctx.fillText(currentLine, xMargin + xOffset, y);
+      if (!includeParagraphBreaks) {
+        passage = passage.replaceAll(/<\/?p.*?>/g, "");
       }
+      passage = passage.replace(/<span[^>]*>([\s\u200B]*)<\/span>/g, "");
+      if (/<\/p>$/.test(passage)) {
+        passage = passage.replace(/<\/p>$/, " (ESV)</p>");
+      } else if (/<\/span>$/.test(passage)) {
+        passage = passage.replace(/<\/span>$/, " (ESV)</span>");
+      } else {
+        passage += " (ESV)";
+      }
+      passage = passage.replaceAll(/(<p[^>]+>) /g, "$1");
+      passage = passage.replaceAll(/(<b[^>]+>) /g, "$1");
+      passage = passage.replaceAll(/(<span[^>]+>) /g, "$1");
+      passage = passage.trim();
+      console.log(passage);
+      const container = document.createElement("div");
+      container.style.width = `${width * scriptureScale}px`;
+      container.style.maxWidth = `${width * scriptureScale}px`;
+      container.style.fontFamily = "EB Garamond";
+      container.style.fontSize = `${fontSize * scriptureScale}px`;
+      container.style.lineHeight = "1.4";
+      container.style.paddingTop = `${(includeParagraphBreaks ? 10 : 2) * scriptureScale}px`;
+      container.style.paddingBottom = `${(includeParagraphBreaks ? 18 : 10) * scriptureScale}px`;
+      container.style.paddingLeft = `${42 * scriptureScale}px`;
+      container.style.paddingRight = `${42 * scriptureScale}px`;
+      container.style.boxSizing = "border-box";
+      container.style.whiteSpace = "pre-wrap";
+      container.style.color = "black";
+      container.style.overflowWrap = "break-word";
+      container.style.position = "absolute";
+      container.style.display = "block";
+      container.style.left = "-9999px";
+      container.style.top = "-9999px";
+      container.classList.add("scripture");
+
+      container.innerHTML = passage;
+
+      document.body.appendChild(container);
+
+      const canvas = await html2canvas(container, {
+        width: width * scriptureScale,
+        backgroundColor: "#FFFFFF",
+      });
 
       images.push(canvas.toDataURL("image/png"));
+      document.body.removeChild(container);
     }
 
     return images;
   }
 
   async function fetchScriptureText(references: string) {
-    const apiUrl = `https://api.esv.org/v3/passage/text/?q=${encodeURIComponent(references)}&include-passage-references=true&include-verse-numbers=false&include-footnotes=false&include-headings=false&include-short-copyright=true`;
+    const apiUrl = `https://api.esv.org/v3/passage/html/?q=${encodeURIComponent(references)}&include-passage-references=true&include-verse-numbers=${includeVerseNumbers}&include-footnotes=false&include-headings=false&include-short-copyright=false&include-audio-link=false`;
 
     const headers = {
       Authorization: `Token 949800eb47c7ad8a634d9`,
@@ -684,7 +664,7 @@
   >
 </main>
 
-{#if isGenerating || isUploading}
+{#if isGenerating || isUploading || isAddingScripture}
   <div
     class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
   >
@@ -693,7 +673,11 @@
         class="spinner mb-6 w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"
       ></div>
       <p class="text-xl font-semibold text-gray-800">
-        {isUploading ? "Uploading PDF..." : "Generating PDF..."}
+        {isUploading
+          ? "Uploading PDF..."
+          : isGenerating
+            ? "Generating PDF..."
+            : "Adding Scripture..."}
       </p>
       <p class="text-sm text-gray-600 mt-2">This may take a moment</p>
     </div>
@@ -715,6 +699,13 @@
         class="mr-2"
       />
       <label for="includeParagraphBreaks">Include paragraph breaks</label>
+      <input
+        type="checkbox"
+        id="includeVerseNumbers"
+        bind:checked={includeVerseNumbers}
+        class="mx-2"
+      />
+      <label for="includeVerseNumbers">Include verse numbers</label>
     </div>
     <div class="flex justify-end">
       <button
@@ -804,5 +795,19 @@
     100% {
       transform: rotate(360deg);
     }
+  }
+
+  :global(.scripture p) {
+    display: inline-block;
+    margin-top: 1ch;
+    margin-bottom: 1ch;
+  }
+
+  :global(.scripture p:first-child) {
+    margin-top: 0px;
+  }
+
+  :global(.scripture p:last-child) {
+    margin-bottom: 0px;
   }
 </style>
