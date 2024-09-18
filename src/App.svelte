@@ -344,7 +344,7 @@
 
   async function createScriptureImages(references: string) {
     const scriptureTexts = await fetchScriptureText(references);
-    const scriptureScale = 3;
+    const scriptureScale = scale;
     const fontSize = 8;
     const width = 425;
 
